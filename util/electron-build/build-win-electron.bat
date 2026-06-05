@@ -114,8 +114,15 @@ if /I "%ARCH%"=="arm64" if /I not "%HOSTARCH%"=="arm64" (
 )
 
 echo ===== CONFIGURE (%BUILD_DIR%) =====
+REM Static CRT (/MT) so the produced kuzujs.node has NO runtime dependency on the
+REM VC++ redistributable (VCRUNTIME140.dll / MSVCP140.dll). Without this the addon
+REM fails to load on a clean machine that lacks the redist with
+REM ERR_DLOPEN_FAILED "The specified module could not be found" (Win error 126) -
+REM which is exactly what bites a fresh Windows-on-ARM box. Honoured because kuzu's
+REM cmake_minimum_required(3.15) makes policy CMP0091 NEW.
 cmake -B "%BUILD_DIR%" -G Ninja ^
   -DCMAKE_BUILD_TYPE=Release ^
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded ^
   -DBUILD_NODEJS=TRUE ^
   -DBUILD_SHELL=FALSE ^
   -DBUILD_TESTS=FALSE ^

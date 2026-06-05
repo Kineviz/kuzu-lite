@@ -106,6 +106,12 @@ const hasNapiEntry = exportNames.includes(NAPI_ENTRY);
 console.log("\n=== EXPORTS (" + exportNames.length + " total) ===");
 console.log(NAPI_ENTRY + ": " + (hasNapiEntry ? "present" : "MISSING"));
 
+// --- redist dependency: a self-contained .node must not import the VC++ -------
+// runtime (VCRUNTIME140*/MSVCP140*), or it fails with ERR_DLOPEN_FAILED on a
+// clean machine without the redistributable (Windows error 126).
+const redistDlls = normal.filter((d) => /^(vcruntime140|msvcp140|concrt140)/i.test(d));
+const selfContained = redistDlls.length === 0;
+
 // --- verdict: node.exe must be a DELAY import for Electron compatibility ------
 const nodeNormal = normal.some(isNode);
 const nodeDelay = delay.some(isNode);
@@ -113,6 +119,13 @@ console.log("\n=== VERDICT ===");
 console.log(
   (hasNapiEntry ? "PASS" : "FAIL") +
     ": N-API entry point " + NAPI_ENTRY + (hasNapiEntry ? " is exported." : " is MISSING.")
+);
+console.log(
+  (selfContained ? "PASS" : "WARN") +
+    ": VC++ runtime dependency " +
+    (selfContained
+      ? "none (static CRT) -> loads without the redistributable."
+      : "[" + redistDlls.join(", ") + "] -> target needs the VC++ redist, or rebuild with static CRT.")
 );
 if (nodeNormal) {
   console.log("FAIL: node.exe is a NORMAL import -> will crash inside electron.exe.");

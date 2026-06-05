@@ -132,6 +132,24 @@ arm64 VM) — an x64 host can build the binary but cannot load it. The static ch
 (`pe-imports.js`: machine arch, `node.exe` delay import, exported N-API entry point) all
 pass for the produced binary.
 
+### Static CRT — no VC++ redistributable required
+
+The first arm64 build loaded fine on a dev box but failed on a clean Windows-on-ARM
+machine with `ERR_DLOPEN_FAILED: The specified module could not be found` (Windows error
+126). Root cause: the addon **dynamically linked the MSVC runtime** (`VCRUNTIME140.dll`,
+`MSVCP140.dll`), which is part of the VC++ redistributable — present on dev machines but
+**not on a fresh ARM64 device**. (The x64 prebuilt has the same latent dependency; it
+just usually finds a redist already installed.)
+
+Fix: `build-win-electron.bat` configures with `-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded`
+(**static CRT, `/MT`**), so the produced `.node` is self-contained. After the fix the only
+normal imports left are `KERNEL32.dll` and `WS2_32.dll` (both core OS); the VC++ runtime
+is gone. `pe-imports.js` asserts this — its verdict prints `PASS: VC++ runtime dependency
+none (static CRT)`. This works because `cmake_minimum_required(3.15)` makes CMake policy
+`CMP0091` NEW, so the runtime library is selected via this variable rather than hard-coded
+`/MD` flags. Diagnose a load failure on the target with `diagnose.js` (prints host vs
+binary arch and the exact dlopen error + Windows code).
+
 ## Verify
 
 ```bat
@@ -142,10 +160,14 @@ node util\electron-smoke\node-smoke.js                       :: -> NODE_SMOKE_OK
 set ELECTRON_RUN_AS_NODE=
 node_modules\.bin\electron util\electron-smoke\main.js       :: -> SMOKE_OK
 
-:: Inspect PE import tables — prints the machine arch and a PASS/FAIL verdict
-:: (node.exe must be a DELAY import; exits non-zero on FAIL)
+:: Inspect PE import tables — prints machine arch + PASS/FAIL verdict for the
+:: N-API entry, node.exe delay import, and VC++ runtime (static-CRT) dependency
 node util\electron-smoke\pe-imports.js prebuilt\kuzujs-win32-x64.node
 node util\electron-smoke\pe-imports.js prebuilt\kuzujs-win32-arm64.node
+
+:: Diagnose a load failure ON THE TARGET machine (host vs binary arch, exact
+:: dlopen error + Windows error code). Run under both node and electron.
+node util\electron-smoke\diagnose.js
 ```
 
 ## Other platforms are already Electron-compatible (no rebuild needed)
