@@ -14,6 +14,7 @@
     "install": "node util/install.js",
     "copy": "node util/copy.js",
     "test": "node util/test.js",
+    "test:electron": "npx electron@42.3.0 util/electron-smoke/main.js",
     "release": "npm publish --access public --registry https://registry.npmjs.org"
   },
   "author": "Kùzu Team",

@@ -6,7 +6,12 @@ The default `prebuilt/kuzujs-win32-x64.node` shipped by upstream kuzu **crashes 
 loaded inside Electron** (the process dies on `process.dlopen`). The binary in this
 repo's `prebuilt/` has been rebuilt with a one-line delay-load fix so the **same file
 works in both Node.js and Electron**. Targets verified: **Electron 39.8.10 (Node 22.22),
-plain Node 22.22, win x64**.
+plain Node 22.22, win x64**. The build script (`build-win-electron.bat`) also produces a
+**win arm64** binary by cross-compiling from an x64 host — `prebuilt/kuzujs-win32-arm64.node`
+is built and statically verified (PE machine = arm64, `node.exe` delay import, N-API entry
+exported); see [ARM64](#arm64-windows-on-arm) below for the toolchain component and the
+upstream fixes it needs. Runtime smoke-testing of the arm64 binary requires real
+Windows-on-ARM hardware (an x64 host cannot load it).
 
 ## Root cause
 
@@ -61,16 +66,71 @@ yarn add kuzu                       :: populate node_modules/kuzu/kuzu-source
 cd node_modules\kuzu\kuzu-source\tools\nodejs_api
 npm install --include=dev           :: cmake-js + node-addon-api
 cd ..\..\..\..\..
-util\electron-build\build-win-electron.bat
+util\electron-build\build-win-electron.bat            :: x64 (default)
+util\electron-build\build-win-electron.bat arm64      :: arm64 (cross from x64 host)
 ```
 
-The script patches the CMakeLists, runs the full static build (`cmake -G Ninja`,
-`--target kuzujs`), and copies the result to both `kuzujs.node` and
-`prebuilt\kuzujs-win32-x64.node`.
+The script auto-locates Visual Studio via `vswhere` (override with the `VSINSTALL`
+env var), runs a **toolchain preflight** (`check-toolchain.js`), patches the
+CMakeLists, runs the full static build (`cmake -G Ninja`, `--target kuzujs`), copies
+the result to `prebuilt\kuzujs-win32-<arch>.node`, and finally re-parses the produced
+PE to assert `node.exe` is a delay import. The root `kuzujs.node` is refreshed only
+when the target arch matches the host (an arm64 binary can't load on an x64 host).
 
-Toolchain used for the committed binary: **VS 2026, MSVC 14.50.35717, cmake+ninja from
-VS, Node 22.22.0**. (Edit `VCVARS` in the `.bat` if your VS path differs.) A full build
-is ~1000 compile steps; expect a few minutes on a 12-core box.
+Toolchain used for the committed x64 binary: **VS 2026, MSVC 14.50.35717, cmake+ninja
+from VS, Node 22.22.0**. A full build is ~1000 compile steps; expect a few minutes on a
+12-core box.
+
+### ARM64 (Windows on ARM)
+
+`kuzujs-win32-arm64.node` is produced by **cross-compiling from an x64 host**, which
+needs the separate **"MSVC … ARM64/ARM64EC build tools"** VS component (the default x64
+toolset cannot target ARM64). Check first:
+
+```bat
+node util\electron-build\check-toolchain.js arm64
+```
+
+If it reports `INCOMPLETE`, it prints the exact `vs_installer … --add
+Microsoft.VisualStudio.Component.VC.Tools.ARM64` command to add the component (or use
+the VS Installer GUI → Individual components → search "ARM64"). The Windows SDK already
+ships ARM64 libs, so only the MSVC cross toolset is missing on a typical x64 dev box.
+
+**Auto-install.** `build-win-electron.bat` will install that component for you when the
+preflight finds it missing — it runs `vs_installer modify … --add … --quiet --norestart
+--wait`, then re-checks and continues. This needs an **elevated (Administrator)** prompt
+(the script verifies via `net session`). To install without building, or to install
+ahead of time:
+
+```bat
+util\electron-build\build-win-electron.bat install-tools arm64
+```
+
+Set `NO_INSTALL_TOOLS=1` to disable auto-install and just fail with guidance instead.
+
+The build script passes `-DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=ARM64`
+for the cross configure and uses `vcvarsamd64_arm64.bat`.
+
+**Upstream ARM64 fixes** (applied idempotently by `patch-cmakelists.js`, since the
+kuzu source tree under `node_modules` is not committed; harmless for x64 builds):
+
+1. **`_AMD64_` hard-coded** in the root `CMakeLists.txt` → `<winnt.h>` takes the x64
+   branch and references x64-only intrinsics, failing with `C3861` (`ReadAcquire8`,
+   `WriteRelease8`, …). Fixed by choosing `_ARM64_` vs `_AMD64_` from
+   `CMAKE_SYSTEM_PROCESSOR`.
+2. **PCG endianness** (`third_party/pcg/pcg_uint128.hpp`) only recognises x86/x64 as
+   little-endian and `#error`s on ARM64 (`C1189`). Fixed by adding ARM/ARM64 to the
+   little-endian branch.
+3. **cmake-js node.lib arch**: `cmake-js print-cmakejs-lib` resolves `node.lib` for the
+   *host* arch and ignores `npm_config_arch`, so the addon would link against the x64
+   `node.lib` and fail with `LNK1112`. Fixed by passing `--arch <target>` (mapped from
+   `CMAKE_SYSTEM_PROCESSOR`) to the resolver so it picks `win-arm64/node.lib`.
+
+The first two match the known fixes from the ladybug ARM64 port. A clean cross build is
+~1070 steps. **Runtime** verification still needs real Windows-on-ARM hardware (or an
+arm64 VM) — an x64 host can build the binary but cannot load it. The static checks
+(`pe-imports.js`: machine arch, `node.exe` delay import, exported N-API entry point) all
+pass for the produced binary.
 
 ## Verify
 
@@ -82,8 +142,10 @@ node util\electron-smoke\node-smoke.js                       :: -> NODE_SMOKE_OK
 set ELECTRON_RUN_AS_NODE=
 node_modules\.bin\electron util\electron-smoke\main.js       :: -> SMOKE_OK
 
-:: Inspect PE import tables (node.exe must be a DELAY import)
+:: Inspect PE import tables — prints the machine arch and a PASS/FAIL verdict
+:: (node.exe must be a DELAY import; exits non-zero on FAIL)
 node util\electron-smoke\pe-imports.js prebuilt\kuzujs-win32-x64.node
+node util\electron-smoke\pe-imports.js prebuilt\kuzujs-win32-arm64.node
 ```
 
 ## Other platforms are already Electron-compatible (no rebuild needed)

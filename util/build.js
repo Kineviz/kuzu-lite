@@ -164,6 +164,7 @@ const srcDir = path.join(rootDir, "node_modules", "kuzu");
 const destDir = path.join(rootDir);
 
 if (fs.existsSync(srcDir)) {
+  //the window version do not support electron, so need build byself
   copyDir(srcDir, destDir, [
     "kuzu-source",
     "node_modules",
@@ -177,6 +178,7 @@ if (fs.existsSync(srcDir)) {
     ".dockerignore",
     ".npmignore",
     "Dockerfile",
+    "prebuilt/kuzujs-win32-x64.node"
   ]);
   console.log("Copying completed!");
 } else {

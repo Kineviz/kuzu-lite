@@ -3,6 +3,7 @@ const path = require("path");
 const k = require(path.join(__dirname, "..", "..", "index.js"));
 (async () => {
   console.log("NODE_VERSION=" + process.version);
+  console.log("ARCH=" + process.arch);
   console.log("KUZU_VERSION=" + k.VERSION);
   const db = new k.Database(":memory:");
   const c = new k.Connection(db);
